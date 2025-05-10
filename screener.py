@@ -1,316 +1,557 @@
 """
-Module de screening des actions
-Combine les scores de Momentum et Quality pour sélectionner les meilleures actions
+Module de screening d'actions
+Combine les scores de momentum et qualité pour sélectionner les meilleures opportunités
 """
 
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
+import pandas as pd
+import logging
+import os
+from datetime import datetime
+
+from config import SCREENER_CONFIG
+from utils import setup_logger, rank_percentile, generate_timestamp
+from momentum import MomentumAnalyzer
+from quality import QualityAnalyzer
+
+# Configuration du logger
+logger = setup_logger(__name__, "screener.log")
 
 class StockScreener:
     """
-    Classe pour filtrer et sélectionner les actions selon les critères de Momentum et Quality
+    Classe pour filtrer et sélectionner les meilleures opportunités d'investissement
     """
     
-    def __init__(self, momentum_weight=0.6, quality_weight=0.4):
+    def __init__(self, config=None):
         """
-        Initialise le screener avec des poids personnalisables
+        Initialise le screener avec la configuration spécifiée
         
         Parameters:
-            momentum_weight (float): Poids du score Momentum (défaut: 0.6)
-            quality_weight (float): Poids du score Quality (défaut: 0.4)
+            config (dict): Configuration du screener
         """
-        # Vérifier que la somme des poids est 1
-        if abs(momentum_weight + quality_weight - 1.0) > 1e-10:
-            raise ValueError("La somme des poids doit être égale à 1")
-            
-        self.momentum_weight = momentum_weight
-        self.quality_weight = quality_weight
+        self.config = config or SCREENER_CONFIG
+        self.momentum_analyzer = MomentumAnalyzer()
+        self.quality_analyzer = QualityAnalyzer()
     
-    def normalize_scores(self, scores_dict):
+    def apply_filters(self, stocks_data):
         """
-        Normalise les scores entre 0 et 1 pour rendre les valeurs comparables
+        Applique les filtres de base aux données des actions
         
         Parameters:
-            scores_dict (dict): Dictionnaire avec les scores par symbole
+            stocks_data (dict): Dictionnaire des données pour chaque action
             
         Returns:
-            dict: Dictionnaire avec les scores normalisés
+            dict: Dictionnaire filtré des actions
         """
-        if not scores_dict:
-            return {}
+        filtered_stocks = {}
         
-        # Préparer les données pour la normalisation
-        symbols = list(scores_dict.keys())
+        for symbol, data in stocks_data.items():
+            try:
+                # Vérification de la présence des données nécessaires
+                if 'fundamental' not in data or 'overview' not in data['fundamental']:
+                    logger.warning(f"Données fondamentales manquantes pour {symbol}, ignoré.")
+                    continue
+                
+                overview = data['fundamental']['overview']
+                
+                # Application des filtres de la configuration
+                if 'min_market_cap' in self.config:
+                    if 'MarketCap' not in overview or overview['MarketCap'] < self.config['min_market_cap']:
+                        logger.info(f"{symbol} filtré: capitalisation boursière trop faible")
+                        continue
+                
+                if 'max_pe_ratio' in self.config:
+                    if 'PERatio' not in overview or overview['PERatio'] <= 0 or overview['PERatio'] > self.config['max_pe_ratio']:
+                        logger.info(f"{symbol} filtré: PE ratio hors limite")
+                        continue
+                
+                if 'min_roe' in self.config:
+                    if 'ROE' not in overview or overview['ROE'] < self.config['min_roe']:
+                        logger.info(f"{symbol} filtré: ROE trop faible")
+                        continue
+                
+                if 'max_debt_to_equity' in self.config:
+                    if 'DebtToEquity' not in overview or overview['DebtToEquity'] > self.config['max_debt_to_equity']:
+                        logger.info(f"{symbol} filtré: ratio Dette/Fonds propres trop élevé")
+                        continue
+                
+                if 'min_operating_margin' in self.config:
+                    if 'OperatingMarginTTM' not in overview or overview['OperatingMarginTTM'] < self.config['min_operating_margin']:
+                        logger.info(f"{symbol} filtré: marge opérationnelle trop faible")
+                        continue
+                
+                # L'action a passé tous les filtres
+                filtered_stocks[symbol] = data
+                
+            except Exception as e:
+                logger.error(f"Erreur lors du filtrage de {symbol}: {str(e)}")
         
-        # Extraire les scores de Momentum et Quality
-        momentum_scores = np.array([scores_dict[symbol].get('momentum', {}).get('combined_score', 0) for symbol in symbols])
-        quality_scores = np.array([scores_dict[symbol].get('quality', {}).get('quality_score', 0) for symbol in symbols])
-        
-        # Gérer les cas où tous les scores sont identiques
-        if np.std(momentum_scores) > 1e-10:
-            momentum_scaler = MinMaxScaler()
-            momentum_scores_normalized = momentum_scaler.fit_transform(momentum_scores.reshape(-1, 1)).flatten()
-        else:
-            momentum_scores_normalized = momentum_scores
-        
-        if np.std(quality_scores) > 1e-10:
-            quality_scaler = MinMaxScaler()
-            quality_scores_normalized = quality_scaler.fit_transform(quality_scores.reshape(-1, 1)).flatten()
-        else:
-            quality_scores_normalized = quality_scores
-        
-        # Mettre à jour le dictionnaire avec les scores normalisés
-        normalized_dict = {}
-        for i, symbol in enumerate(symbols):
-            # Copier les scores originaux
-            normalized_dict[symbol] = scores_dict[symbol].copy()
-            
-            # Mettre à jour avec les scores normalisés
-            if 'momentum' in normalized_dict[symbol]:
-                normalized_dict[symbol]['momentum']['combined_score_normalized'] = momentum_scores_normalized[i]
-            
-            if 'quality' in normalized_dict[symbol]:
-                normalized_dict[symbol]['quality']['quality_score_normalized'] = quality_scores_normalized[i]
-        
-        return normalized_dict
+        logger.info(f"{len(filtered_stocks)} actions ont passé les filtres sur {len(stocks_data)} au total")
+        return filtered_stocks
     
-    def calculate_combined_score(self, scores_dict):
+    def calculate_scores(self, stocks_data):
         """
-        Calcule le score combiné Momentum + Quality
+        Calcule les scores de momentum et qualité pour chaque action
         
         Parameters:
-            scores_dict (dict): Dictionnaire avec les scores normalisés
+            stocks_data (dict): Dictionnaire des données pour chaque action
             
         Returns:
-            dict: Dictionnaire avec les scores combinés
-        """
-        combined_dict = {}
-        
-        for symbol, scores in scores_dict.items():
-            momentum_score = scores.get('momentum', {}).get('combined_score_normalized', 0)
-            quality_score = scores.get('quality', {}).get('quality_score_normalized', 0)
-            
-            # Calculer le score combiné
-            combined_score = (
-                self.momentum_weight * momentum_score +
-                self.quality_weight * quality_score
-            )
-            
-            # Stocker le résultat
-            combined_dict[symbol] = {
-                'momentum_score': momentum_score,
-                'quality_score': quality_score,
-                'combined_score': combined_score
-            }
-        
-        return combined_dict
-    
-    def filter_stocks(self, combined_scores, min_momentum=0.0, min_quality=0.0, min_combined=0.0):
-        """
-        Filtre les actions selon des seuils minimaux
-        
-        Parameters:
-            combined_scores (dict): Dictionnaire avec les scores combinés
-            min_momentum (float): Score minimum de Momentum
-            min_quality (float): Score minimum de Quality
-            min_combined (float): Score minimum combiné
-            
-        Returns:
-            dict: Dictionnaire avec les actions filtrées
-        """
-        filtered_scores = {}
-        
-        for symbol, scores in combined_scores.items():
-            if (scores['momentum_score'] >= min_momentum and
-                scores['quality_score'] >= min_quality and
-                scores['combined_score'] >= min_combined):
-                filtered_scores[symbol] = scores
-        
-        return filtered_scores
-    
-    def rank_stocks(self, combined_scores, limit=None, reverse=True):
-        """
-        Trie les actions selon leur score combiné
-        
-        Parameters:
-            combined_scores (dict): Dictionnaire avec les scores combinés
-            limit (int): Nombre d'actions à retenir (défaut: None = toutes)
-            reverse (bool): Si True, trie par ordre décroissant (défaut: True)
-            
-        Returns:
-            list: Liste des symboles triés
-        """
-        # Trier par score combiné
-        sorted_stocks = sorted(
-            combined_scores.items(),
-            key=lambda x: x[1]['combined_score'],
-            reverse=reverse
-        )
-        
-        # Limiter le nombre de résultats si demandé
-        if limit is not None:
-            sorted_stocks = sorted_stocks[:limit]
-        
-        return sorted_stocks
-    
-    def create_results_dataframe(self, stock_data, combined_scores, sorted_stocks):
-        """
-        Crée un DataFrame avec les résultats détaillés
-        
-        Parameters:
-            stock_data (dict): Dictionnaire avec les données des actions
-            combined_scores (dict): Dictionnaire avec les scores combinés
-            sorted_stocks (list): Liste des symboles triés
-            
-        Returns:
-            pd.DataFrame: DataFrame avec les résultats
+            pd.DataFrame: DataFrame avec les scores calculés
         """
         results = []
         
-        for symbol, scores in sorted_stocks:
-            # Récupérer les métriques fondamentales
-            fundamental_data = {}
-            if 'fundamental' in stock_data.get(symbol, {}):
-                fundamental_data = stock_data[symbol]['fundamental']
-            
-            # Récupérer les performances techniques
-            technical_data = {}
-            if 'momentum' in stock_data.get(symbol, {}) and 'technical' in stock_data[symbol]['momentum']:
-                technical_data = stock_data[symbol]['momentum']['technical']
-            
-            # Construire la ligne de résultat
-            result = {
-                'Symbol': symbol,
-                'Combined_Score': scores['combined_score'],
-                'Momentum_Score': scores['momentum_score'],
-                'Quality_Score': scores['quality_score'],
-                'Perf_1M': technical_data.get('perf_1m', 0) * 100,
-                'Perf_3M': technical_data.get('perf_3m', 0) * 100,
-                'Perf_6M': technical_data.get('perf_6m', 0) * 100,
-                'Perf_12M': technical_data.get('perf_12m', 0) * 100,
-                'ROE': fundamental_data.get('ROE', 0) * 100,
-                'Profit_Margin': fundamental_data.get('ProfitMargin', 0) * 100,
-                'Debt_To_Equity': fundamental_data.get('DebtToEquity', 0),
-                'Market_Cap': fundamental_data.get('MarketCap', 0),
-                'EPS': fundamental_data.get('EPS', 0),
-                'PE_Ratio': fundamental_data.get('PERatio', 0)
-            }
-            
-            results.append(result)
+        for symbol, data in stocks_data.items():
+            try:
+                # Extraction des données nécessaires
+                historical_data = data.get('historical', None)
+                fundamental_data = data.get('fundamental', None)
+                
+                # Calcul des scores de momentum
+                momentum_result = self.momentum_analyzer.calculate_combined_momentum(
+                    historical_data, fundamental_data
+                )
+                
+                # Calcul des scores de qualité
+                quality_result = self.quality_analyzer.calculate_quality_score(fundamental_data)
+                
+                # Extraction de l'information d'entreprise
+                company_info = {}
+                if fundamental_data and 'overview' in fundamental_data:
+                    overview = fundamental_data['overview']
+                    company_info = {
+                        'Name': overview.get('Name', symbol),
+                        'Sector': overview.get('Sector', 'Unknown'),
+                        'Industry': overview.get('Industry', 'Unknown'),
+                        'MarketCap': overview.get('MarketCap', np.nan),
+                        'PERatio': overview.get('PERatio', np.nan),
+                        'ROE': overview.get('ROE', np.nan),
+                        'ProfitMargin': overview.get('ProfitMargin', np.nan),
+                        'DebtToEquity': overview.get('DebtToEquity', np.nan),
+                        'DividendYield': overview.get('DividendYield', np.nan),
+                        'EPS': overview.get('EPS', np.nan),
+                        'Beta': overview.get('Beta', np.nan)
+                    }
+                
+                # Création d'une entrée pour les résultats
+                result = {
+                    'Symbol': symbol,
+                    'MomentumScore': momentum_result['score'],
+                    'QualityScore': quality_result['score'],
+                    'TechnicalMomentum': momentum_result['technical']['score'],
+                    'FundamentalMomentum': momentum_result['fundamental']['score'],
+                    **company_info
+                }
+                
+                results.append(result)
+                
+            except Exception as e:
+                logger.error(f"Erreur lors du calcul des scores pour {symbol}: {str(e)}")
         
-        # Créer le DataFrame
+        # Conversion en DataFrame
+        if not results:
+            return pd.DataFrame()
+        
         df = pd.DataFrame(results)
         
-        # Formater les colonnes numériques
-        for col in ['Perf_1M', 'Perf_3M', 'Perf_6M', 'Perf_12M', 'ROE', 'Profit_Margin']:
-            if col in df.columns:
-                df[col] = df[col].round(2)
+        # Calcul des percentiles pour les scores
+        if 'MomentumScore' in df.columns and not df['MomentumScore'].isna().all():
+            df['MomentumPercentile'] = rank_percentile(df['MomentumScore'].values)
+        else:
+            df['MomentumPercentile'] = np.nan
+            
+        if 'QualityScore' in df.columns and not df['QualityScore'].isna().all():
+            df['QualityPercentile'] = rank_percentile(df['QualityScore'].values)
+        else:
+            df['QualityPercentile'] = np.nan
         
-        for col in ['Combined_Score', 'Momentum_Score', 'Quality_Score', 'Debt_To_Equity', 'PE_Ratio']:
-            if col in df.columns:
-                df[col] = df[col].round(3)
-        
-        # Formater les valeurs monétaires
-        if 'Market_Cap' in df.columns:
-            df['Market_Cap'] = df['Market_Cap'].apply(lambda x: f"{x/1e9:.2f}B" if x >= 1e9 else f"{x/1e6:.2f}M")
-        
-        if 'EPS' in df.columns:
-            df['EPS'] = df['EPS'].round(2)
+        # Calcul du score combiné (60% Momentum, 40% Qualité)
+        if 'MomentumPercentile' in df.columns and 'QualityPercentile' in df.columns:
+            valid_mask = ~df['MomentumPercentile'].isna() & ~df['QualityPercentile'].isna()
+            
+            df['CombinedScore'] = np.nan
+            df.loc[valid_mask, 'CombinedScore'] = (
+                0.6 * df.loc[valid_mask, 'MomentumPercentile'] + 
+                0.4 * df.loc[valid_mask, 'QualityPercentile']
+            ) / 100.0  # Normalisation entre 0 et 1
         
         return df
     
-    def screen_stocks(self, stock_data, min_momentum=0.0, min_quality=0.0, min_combined=0.0, top_n=None):
+    def select_top_picks(self, scores_df):
+        """
+        Sélectionne les meilleures opportunités d'investissement
+        
+        Parameters:
+            scores_df (pd.DataFrame): DataFrame avec les scores calculés
+            
+        Returns:
+            pd.DataFrame: DataFrame avec les meilleures opportunités
+        """
+        if scores_df.empty:
+            logger.warning("Pas de données de scores disponibles pour la sélection")
+            return pd.DataFrame()
+        
+        # Application des seuils de momentum et qualité
+        filtered_df = scores_df.copy()
+        
+        if 'momentum_threshold' in self.config:
+            momentum_min = self.config['momentum_threshold'] * 100
+            filtered_df = filtered_df[filtered_df['MomentumPercentile'] >= momentum_min]
+        
+        if 'quality_threshold' in self.config:
+            quality_min = self.config['quality_threshold'] * 100
+            filtered_df = filtered_df[filtered_df['QualityPercentile'] >= quality_min]
+        
+        if filtered_df.empty:
+            logger.warning("Aucune action ne répond aux critères de seuil de momentum et qualité")
+            return pd.DataFrame()
+        
+        # Tri par score combiné
+        if 'CombinedScore' in filtered_df.columns:
+            filtered_df = filtered_df.sort_values('CombinedScore', ascending=False)
+        
+        # Sélection du nombre spécifié d'actions
+        top_count = self.config.get('top_picks_count', 20)
+        top_picks = filtered_df.head(top_count)
+        
+        logger.info(f"Sélection de {len(top_picks)} meilleures opportunités sur {len(scores_df)} actions analysées")
+        return top_picks
+    
+    def run_screening(self, stocks_data):
         """
         Exécute le processus complet de screening
         
         Parameters:
-            stock_data (dict): Dictionnaire avec les données des actions
-            min_momentum (float): Score minimum de Momentum
-            min_quality (float): Score minimum de Quality
-            min_combined (float): Score minimum combiné
-            top_n (int): Nombre d'actions à retenir
+            stocks_data (dict): Dictionnaire des données pour chaque action
             
         Returns:
-            tuple: (DataFrame avec les résultats, liste des symboles triés)
+            dict: Résultats du screening incluant les données filtrées et les meilleures opportunités
         """
-        # Préparer un dictionnaire avec les scores
-        scores_dict = {}
-        for symbol, data in stock_data.items():
-            scores_dict[symbol] = {}
+        logger.info(f"Début du screening sur {len(stocks_data)} actions")
+        
+        # Étape 1: Application des filtres de base
+        filtered_stocks = self.apply_filters(stocks_data)
+        
+        # Étape 2: Calcul des scores de momentum et qualité
+        scores_df = self.calculate_scores(filtered_stocks)
+        
+        # Étape 3: Sélection des meilleures opportunités
+        top_picks = self.select_top_picks(scores_df)
+        
+        return {
+            'filtered_stocks': filtered_stocks,
+            'scores': scores_df,
+            'top_picks': top_picks,
+            'timestamp': generate_timestamp(),
+            'config': self.config
+        }
+    
+    def save_results(self, results, filename=None):
+        """
+        Sauvegarde les résultats du screening
+        
+        Parameters:
+            results (dict): Résultats du screening
+            filename (str): Nom du fichier pour la sauvegarde
             
-            if 'momentum' in data:
-                scores_dict[symbol]['momentum'] = data['momentum']
+        Returns:
+            str: Chemin du fichier sauvegardé
+        """
+        from config import RESULTS_DIR
+        
+        if filename is None:
+            timestamp = results.get('timestamp', generate_timestamp())
+            filename = f"screening_results_{timestamp}.pkl"
+        
+        # S'assurer que le répertoire existe
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        
+        # Chemin complet du fichier
+        filepath = os.path.join(RESULTS_DIR, filename)
+        
+        # Sauvegarde des résultats
+        try:
+            # On sauvegarde seulement les DataFrames et la configuration
+            save_data = {
+                'scores': results.get('scores', pd.DataFrame()),
+                'top_picks': results.get('top_picks', pd.DataFrame()),
+                'timestamp': results.get('timestamp', generate_timestamp()),
+                'config': results.get('config', {})
+            }
             
-            if 'quality' in data:
-                scores_dict[symbol]['quality'] = data['quality']
+            pd.to_pickle(save_data, filepath)
+            logger.info(f"Résultats sauvegardés dans {filepath}")
+            
+            return filepath
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la sauvegarde des résultats: {str(e)}")
+            return None
+    
+    def load_results(self, filepath):
+        """
+        Charge les résultats d'un screening précédent
         
-        # Normaliser les scores
-        normalized_scores = self.normalize_scores(scores_dict)
+        Parameters:
+            filepath (str): Chemin du fichier à charger
+            
+        Returns:
+            dict: Résultats du screening
+        """
+        try:
+            results = pd.read_pickle(filepath)
+            logger.info(f"Résultats chargés depuis {filepath}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement des résultats: {str(e)}")
+            return None
+    
+    def generate_report(self, results, sector_breakdown=True, output_format='text'):
+        """
+        Génère un rapport à partir des résultats du screening
         
-        # Calculer les scores combinés
-        combined_scores = self.calculate_combined_score(normalized_scores)
+        Parameters:
+            results (dict): Résultats du screening
+            sector_breakdown (bool): Si True, inclut une analyse par secteur
+            output_format (str): Format de sortie ('text', 'html', 'markdown')
+            
+        Returns:
+            str: Rapport formaté
+        """
+        if 'top_picks' not in results or results['top_picks'].empty:
+            return "Aucune action sélectionnée. Veuillez exécuter le screening d'abord."
         
-        # Filtrer les actions
-        filtered_scores = self.filter_stocks(
-            combined_scores,
-            min_momentum=min_momentum,
-            min_quality=min_quality,
-            min_combined=min_combined
-        )
+        top_picks = results['top_picks']
+        timestamp = results.get('timestamp', 'Unknown')
         
-        # Trier les actions
-        sorted_stocks = self.rank_stocks(filtered_scores, limit=top_n)
-        
-        # Créer le DataFrame des résultats
-        results_df = self.create_results_dataframe(stock_data, combined_scores, sorted_stocks)
-        
-        return results_df, sorted_stocks
+        if output_format == 'text':
+            # Rapport en format texte
+            report = []
+            report.append("=" * 80)
+            report.append(f"RAPPORT DE SCREENING MOMENTUM-QUALITY - {timestamp}")
+            report.append("=" * 80)
+            report.append("")
+            
+            report.append(f"Nombre d'actions sélectionnées: {len(top_picks)}")
+            report.append("")
+            
+            report.append("TOP PICKS:")
+            report.append("-" * 80)
+            
+            # Formatage des colonnes
+            for i, (_, row) in enumerate(top_picks.iterrows(), 1):
+                symbol = row['Symbol']
+                name = row.get('Name', 'N/A')
+                sector = row.get('Sector', 'N/A')
+                momentum = row.get('MomentumPercentile', 0)
+                quality = row.get('QualityPercentile', 0)
+                combined = row.get('CombinedScore', 0) * 100
+                
+                report.append(f"{i}. {symbol} - {name} ({sector})")
+                report.append(f"   Momentum: {momentum:.1f}%, Quality: {quality:.1f}%, Combined: {combined:.1f}%")
+                report.append("")
+            
+            # Analyse par secteur si demandée
+            if sector_breakdown and 'Sector' in top_picks.columns:
+                report.append("")
+                report.append("RÉPARTITION PAR SECTEUR:")
+                report.append("-" * 80)
+                
+                sector_counts = top_picks['Sector'].value_counts()
+                for sector, count in sector_counts.items():
+                    percentage = count / len(top_picks) * 100
+                    report.append(f"{sector}: {count} actions ({percentage:.1f}%)")
+                
+                report.append("")
+            
+            # Configuration utilisée
+            report.append("CONFIGURATION DU SCREENING:")
+            report.append("-" * 80)
+            
+            config = results.get('config', {})
+            for key, value in config.items():
+                report.append(f"{key}: {value}")
+            
+            return "\n".join(report)
+            
+        elif output_format == 'html':
+            # Génération d'un rapport HTML basique
+            html = []
+            html.append("<html><head><title>Rapport de Screening Momentum-Quality</title></head>")
+            html.append("<style>body { font-family: Arial; margin: 20px; } "
+                        "table { border-collapse: collapse; width: 100%; } "
+                        "th, td { border: 1px solid #ddd; padding: 8px; } "
+                        "th { background-color: #f2f2f2; } "
+                        "tr:nth-child(even) { background-color: #f9f9f9; } "
+                        "h1, h2 { color: #333; }</style>")
+            html.append("<body>")
+            
+            html.append(f"<h1>Rapport de Screening Momentum-Quality - {timestamp}</h1>")
+            
+            html.append(f"<p>Nombre d'actions sélectionnées: {len(top_picks)}</p>")
+            
+            html.append("<h2>Top Picks</h2>")
+            html.append("<table>")
+            html.append("<tr><th>Rang</th><th>Symbole</th><th>Nom</th><th>Secteur</th>"
+                        "<th>Momentum</th><th>Qualité</th><th>Score Combiné</th></tr>")
+            
+            for i, (_, row) in enumerate(top_picks.iterrows(), 1):
+                symbol = row['Symbol']
+                name = row.get('Name', 'N/A')
+                sector = row.get('Sector', 'N/A')
+                momentum = row.get('MomentumPercentile', 0)
+                quality = row.get('QualityPercentile', 0)
+                combined = row.get('CombinedScore', 0) * 100
+                
+                html.append(f"<tr><td>{i}</td><td>{symbol}</td><td>{name}</td><td>{sector}</td>"
+                            f"<td>{momentum:.1f}%</td><td>{quality:.1f}%</td><td>{combined:.1f}%</td></tr>")
+            
+            html.append("</table>")
+            
+            # Analyse par secteur si demandée
+            if sector_breakdown and 'Sector' in top_picks.columns:
+                html.append("<h2>Répartition par Secteur</h2>")
+                html.append("<table>")
+                html.append("<tr><th>Secteur</th><th>Nombre d'actions</th><th>Pourcentage</th></tr>")
+                
+                sector_counts = top_picks['Sector'].value_counts()
+                for sector, count in sector_counts.items():
+                    percentage = count / len(top_picks) * 100
+                    html.append(f"<tr><td>{sector}</td><td>{count}</td><td>{percentage:.1f}%</td></tr>")
+                
+                html.append("</table>")
+            
+            # Configuration
+            html.append("<h2>Configuration du Screening</h2>")
+            html.append("<table>")
+            html.append("<tr><th>Paramètre</th><th>Valeur</th></tr>")
+            
+            config = results.get('config', {})
+            for key, value in config.items():
+                html.append(f"<tr><td>{key}</td><td>{value}</td></tr>")
+            
+            html.append("</table>")
+            
+            html.append("</body></html>")
+            
+            return "\n".join(html)
+            
+        elif output_format == 'markdown':
+            # Génération d'un rapport en Markdown
+            md = []
+            md.append(f"# Rapport de Screening Momentum-Quality - {timestamp}")
+            md.append("")
+            
+            md.append(f"Nombre d'actions sélectionnées: **{len(top_picks)}**")
+            md.append("")
+            
+            md.append("## Top Picks")
+            md.append("")
+            md.append("| Rang | Symbole | Nom | Secteur | Momentum | Qualité | Score Combiné |")
+            md.append("|------|---------|-----|---------|----------|---------|---------------|")
+            
+            for i, (_, row) in enumerate(top_picks.iterrows(), 1):
+                symbol = row['Symbol']
+                name = row.get('Name', 'N/A')
+                sector = row.get('Sector', 'N/A')
+                momentum = row.get('MomentumPercentile', 0)
+                quality = row.get('QualityPercentile', 0)
+                combined = row.get('CombinedScore', 0) * 100
+                
+                md.append(f"| {i} | {symbol} | {name} | {sector} | {momentum:.1f}% | {quality:.1f}% | {combined:.1f}% |")
+            
+            md.append("")
+            
+            # Analyse par secteur si demandée
+            if sector_breakdown and 'Sector' in top_picks.columns:
+                md.append("## Répartition par Secteur")
+                md.append("")
+                md.append("| Secteur | Nombre d'actions | Pourcentage |")
+                md.append("|---------|------------------|-------------|")
+                
+                sector_counts = top_picks['Sector'].value_counts()
+                for sector, count in sector_counts.items():
+                    percentage = count / len(top_picks) * 100
+                    md.append(f"| {sector} | {count} | {percentage:.1f}% |")
+                
+                md.append("")
+            
+            # Configuration
+            md.append("## Configuration du Screening")
+            md.append("")
+            md.append("| Paramètre | Valeur |")
+            md.append("|-----------|--------|")
+            
+            config = results.get('config', {})
+            for key, value in config.items():
+                md.append(f"| {key} | {value} |")
+            
+            return "\n".join(md)
+            
+        else:
+            return "Format de sortie non supporté. Utilisez 'text', 'html' ou 'markdown'."
+
 
 if __name__ == "__main__":
     # Test simple du module
-    import data_loader
-    import momentum
-    import quality
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime
     
-    # Charger quelques données
-    api_key = input("Entrez votre clé API Alpha Vantage: ")
-    loader = data_loader.DataLoader(api_key=api_key)
-    
-    # Récupérer des données pour quelques symboles
-    symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "FB"]
-    stock_data = {}
-    
-    momentum_calc = momentum.MomentumCalculator()
-    quality_calc = quality.QualityCalculator()
-    
-    for symbol in symbols:
-        print(f"Récupération des données pour {symbol}")
+    # Création de données de test
+    test_stocks = {}
+    for i, symbol in enumerate(['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META']):
+        # Données historiques
+        dates = pd.date_range(end=datetime.now(), periods=300, freq='D')
         
-        # Récupérer les données
-        historical = loader.get_stock_data(symbol)
-        fundamental = loader.get_fundamental_data(symbol)
-        earnings = loader.get_earnings_data(symbol)
+        # Tendance à la hausse avec des variations aléatoires
+        close_prices = [100 + i * 0.5 + j * 0.2 + np.random.normal(0, 2) for j in range(300)]
         
-        if historical is not None:
-            stock_data[symbol] = {
-                'historical': historical,
-                'fundamental': fundamental,
-                'earnings': earnings
+        historical = pd.DataFrame({
+            'close': close_prices,
+            'adjusted_close': close_prices,
+            'volume': [1000000 + np.random.randint(0, 500000) for _ in range(300)]
+        }, index=dates)
+        
+        # Données fondamentales
+        fundamental = {
+            'overview': {
+                'Symbol': symbol,
+                'Name': f"Test Company {i+1}",
+                'Sector': ['Technology', 'Finance', 'Healthcare', 'Consumer', 'Industrial'][i % 5],
+                'Industry': 'Software',
+                'MarketCap': 1e9 * (10 + i),
+                'PERatio': 20 + i,
+                'ROE': 0.15 + i * 0.01,
+                'ProfitMargin': 0.1 + i * 0.01,
+                'OperatingMarginTTM': 0.2 + i * 0.01,
+                'DebtToEquity': 0.5 + i * 0.1,
+                'DividendYield': 0.02,
+                'EPS': 5 + i,
+                'Beta': 1.0 + i * 0.1
             }
-            
-            # Calculer les scores de Momentum
-            momentum_scores = momentum_calc.calculate_momentum_score(stock_data[symbol])
-            stock_data[symbol]['momentum'] = momentum_scores
-            
-            # Calculer les scores de Quality
-            quality_scores = quality_calc.calculate_quality_score(stock_data[symbol])
-            stock_data[symbol]['quality'] = quality_scores
+        }
+        
+        test_stocks[symbol] = {
+            'historical': historical,
+            'fundamental': fundamental
+        }
     
-    # Exécuter le screening
+    # Initialisation du screener
     screener = StockScreener()
-    results_df, sorted_stocks = screener.screen_stocks(stock_data, top_n=3)
     
-    # Afficher les résultats
-    print("\nRésultats du screening:")
-    print(results_df)
+    # Exécution du screening
+    results = screener.run_screening(test_stocks)
+    
+    # Affichage des résultats
+    if 'top_picks' in results and not results['top_picks'].empty:
+        print("\nMeilleures opportunités:")
+        print(results['top_picks'][['Symbol', 'Name', 'Sector', 'MomentumPercentile', 'QualityPercentile', 'CombinedScore']])
+        
+        # Génération d'un rapport
+        report = screener.generate_report(results)
+        print("\nRapport:")
+        print(report)
+    else:
+        print("Aucune action sélectionnée.")
