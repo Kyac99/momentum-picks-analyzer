@@ -499,12 +499,19 @@ class ScreenerVisualizer:
             
             # Extraction des symboles et scores
             symbols = top_picks['Symbol'].values
-            momentum_scores = top_picks['MomentumPercentile'].values
-            quality_scores = top_picks['QualityPercentile'].values
             
-            # Tri par score combiné
-            if 'CombinedScore' in top_picks.columns:
-                sorted_indices = top_picks['CombinedScore'].argsort()[::-1]
+            # Vérification du nom des colonnes pour les scores
+            momentum_col = 'Momentum_Score' if 'Momentum_Score' in top_picks.columns else 'MomentumScore'
+            quality_col = 'Quality_Score' if 'Quality_Score' in top_picks.columns else 'QualityScore'
+            combined_col = 'Combined_Score' if 'Combined_Score' in top_picks.columns else 'CombinedScore'
+            
+            # Extraction des scores
+            momentum_scores = top_picks[momentum_col].values * 100  # Convertir en pourcentage
+            quality_scores = top_picks[quality_col].values * 100    # Convertir en pourcentage
+            
+            # Tri par score combiné si disponible
+            if combined_col in top_picks.columns:
+                sorted_indices = top_picks[combined_col].argsort()[::-1]
                 symbols = symbols[sorted_indices]
                 momentum_scores = momentum_scores[sorted_indices]
                 quality_scores = quality_scores[sorted_indices]
@@ -522,7 +529,7 @@ class ScreenerVisualizer:
             
             # Formatage du graphique
             ax.set_xlabel('Symbole', fontsize=self.config.get('axis_fontsize', 12))
-            ax.set_ylabel('Score (percentile)', fontsize=self.config.get('axis_fontsize', 12))
+            ax.set_ylabel('Score (%)', fontsize=self.config.get('axis_fontsize', 12))
             ax.set_title('Top Picks: Scores de Momentum et Qualité', fontsize=self.config.get('title_fontsize', 16))
             ax.set_xticks(x)
             ax.set_xticklabels(symbols[:max_symbols], rotation=45, ha='right')
@@ -623,18 +630,37 @@ class ScreenerVisualizer:
             return None
         
         # Vérification que les colonnes nécessaires sont présentes
-        required_columns = ['MomentumPercentile', 'QualityPercentile', 'Symbol']
-        if not all(col in scores_df.columns for col in required_columns):
-            logger.warning("Données de scores incomplètes")
+        momentum_col = None
+        quality_col = None
+        
+        # Recherche des colonnes de scores (différentes conventions de nommage possibles)
+        for col in ['Momentum_Score', 'MomentumScore', 'MomentumPercentile']:
+            if col in scores_df.columns:
+                momentum_col = col
+                break
+                
+        for col in ['Quality_Score', 'QualityScore', 'QualityPercentile']:
+            if col in scores_df.columns:
+                quality_col = col
+                break
+        
+        if not momentum_col or not quality_col or 'Symbol' not in scores_df.columns:
+            logger.warning("Données de scores incomplètes ou mal formatées")
             return None
         
         try:
             # Création de la figure
             fig, ax = plt.subplots(figsize=self.config.get('figsize', (12, 10)))
             
-            # Extraction des scores normalisés
-            momentum_scores = scores_df['MomentumPercentile'].values / 100.0  # Conversion en score entre 0 et 1
-            quality_scores = scores_df['QualityPercentile'].values / 100.0    # Conversion en score entre 0 et 1
+            # Normalisation des scores si nécessaire
+            momentum_scores = scores_df[momentum_col].values
+            quality_scores = scores_df[quality_col].values
+            
+            # Si les scores sont déjà des percentiles (0-100), les convertir en scores (0-1)
+            if momentum_col == 'MomentumPercentile' and np.max(momentum_scores) > 1:
+                momentum_scores = momentum_scores / 100.0
+            if quality_col == 'QualityPercentile' and np.max(quality_scores) > 1:
+                quality_scores = quality_scores / 100.0
             
             # Création du nuage de points
             scatter = ax.scatter(momentum_scores, quality_scores, 
@@ -686,13 +712,34 @@ class ScreenerVisualizer:
         except Exception as e:
             logger.error(f"Erreur lors du traçage du nuage de points: {str(e)}")
             return None
+
+
+class ResultVisualizer:
+    """
+    Classe unifiée pour générer des visualisations des résultats de l'analyse
+    Sert d'interface pour les différents visualiseurs
+    """
     
-    def generate_report_visualizations(self, results, output_dir=None):
+    def __init__(self, config=None):
         """
-        Génère toutes les visualisations pour un rapport de screening
+        Initialise le visualiseur avec la configuration spécifiée
         
         Parameters:
-            results (dict): Résultats du screening
+            config (dict): Configuration de visualisation
+        """
+        self.config = config or VIZ_CONFIG
+        
+        # Initialisation des visualiseurs spécifiques
+        self.momentum_viz = MomentumVisualizer(config)
+        self.quality_viz = QualityVisualizer(config)
+        self.screener_viz = ScreenerVisualizer(config)
+    
+    def save_all_figures(self, results_df, output_dir=None):
+        """
+        Génère et sauvegarde toutes les visualisations pour les résultats du screening
+        
+        Parameters:
+            results_df (pd.DataFrame): DataFrame avec les résultats du screening
             output_dir (str): Répertoire de sortie pour les graphiques
             
         Returns:
@@ -700,7 +747,7 @@ class ScreenerVisualizer:
         """
         # Utiliser le répertoire de résultats par défaut si non spécifié
         if output_dir is None:
-            timestamp = results.get('timestamp', generate_timestamp())
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_dir = os.path.join(RESULTS_DIR, f"report_{timestamp}")
         
         # Création du répertoire de sortie
@@ -709,25 +756,23 @@ class ScreenerVisualizer:
         # Chemins des graphiques à générer
         graph_paths = {}
         
-        # Top picks
-        if 'top_picks' in results and not results['top_picks'].empty:
-            # Graphique des top picks
-            top_picks_path = os.path.join(output_dir, "top_picks.png")
-            self.plot_top_picks(results['top_picks'], save_path=top_picks_path)
-            graph_paths['top_picks'] = top_picks_path
-            
-            # Répartition sectorielle
-            if 'Sector' in results['top_picks'].columns:
-                sector_path = os.path.join(output_dir, "sector_breakdown.png")
-                self.plot_sector_breakdown(results['top_picks'], save_path=sector_path)
-                graph_paths['sector_breakdown'] = sector_path
+        # Top picks visualization
+        top_picks_path = os.path.join(output_dir, "top_picks.png")
+        self.screener_viz.plot_top_picks(results_df, save_path=top_picks_path)
+        graph_paths['top_picks'] = top_picks_path
         
-        # Nuage de points de tous les scores
-        if 'scores' in results and not results['scores'].empty:
-            scatter_path = os.path.join(output_dir, "scores_scatter.png")
-            self.plot_scores_scatter(results['scores'], save_path=scatter_path)
-            graph_paths['scores_scatter'] = scatter_path
+        # Sector breakdown if available
+        if 'Sector' in results_df.columns:
+            sector_path = os.path.join(output_dir, "sector_breakdown.png")
+            self.screener_viz.plot_sector_breakdown(results_df, save_path=sector_path)
+            graph_paths['sector_breakdown'] = sector_path
         
+        # Scores scatter visualization
+        scatter_path = os.path.join(output_dir, "scores_scatter.png")
+        self.screener_viz.plot_scores_scatter(results_df, save_path=scatter_path)
+        graph_paths['scores_scatter'] = scatter_path
+        
+        logger.info(f"Toutes les visualisations ont été sauvegardées dans {output_dir}")
         return graph_paths
 
 
@@ -763,30 +808,16 @@ if __name__ == "__main__":
         'Symbol': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META'],
         'Name': ['Apple Inc.', 'Microsoft Corp.', 'Alphabet Inc.', 'Amazon.com Inc.', 'Meta Platforms Inc.'],
         'Sector': ['Technology', 'Technology', 'Communication Services', 'Consumer Discretionary', 'Communication Services'],
-        'MomentumScore': [0.85, 0.76, 0.92, 0.68, 0.79],
-        'QualityScore': [0.91, 0.88, 0.73, 0.81, 0.62],
-        'MomentumPercentile': [85, 76, 92, 68, 79],
-        'QualityPercentile': [91, 88, 73, 81, 62],
-        'CombinedScore': [0.87, 0.82, 0.85, 0.76, 0.70]
+        'Momentum_Score': [0.85, 0.76, 0.92, 0.68, 0.79],
+        'Quality_Score': [0.91, 0.88, 0.73, 0.81, 0.62],
+        'Combined_Score': [0.87, 0.82, 0.85, 0.76, 0.70]
     })
     
-    # Initialisation du visualiseur de screening
-    screener_viz = ScreenerVisualizer()
+    # Initialisation du visualiseur unifié
+    result_viz = ResultVisualizer()
     
-    # Traçage des top picks
-    fig_top = screener_viz.plot_top_picks(test_scores)
+    # Test de sauvegarde de toutes les figures
+    test_output_dir = os.path.join(os.getcwd(), "test_output")
+    graph_paths = result_viz.save_all_figures(test_scores, output_dir=test_output_dir)
     
-    if fig_top:
-        plt.show()
-    
-    # Traçage de la répartition sectorielle
-    fig_sector = screener_viz.plot_sector_breakdown(test_scores)
-    
-    if fig_sector:
-        plt.show()
-    
-    # Traçage du nuage de points
-    fig_scatter = screener_viz.plot_scores_scatter(test_scores)
-    
-    if fig_scatter:
-        plt.show()
+    print("Graphiques générés avec succès dans:", test_output_dir)
