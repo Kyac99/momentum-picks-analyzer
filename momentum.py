@@ -14,7 +14,7 @@ from utils import setup_logger, normalize_data, calculate_returns, calculate_wei
 # Configuration du logger
 logger = setup_logger(__name__, "momentum.log")
 
-class MomentumAnalyzer:
+class MomentumCalculator:
     """
     Classe pour calculer les scores de momentum technique et fondamental
     """
@@ -238,17 +238,20 @@ class MomentumAnalyzer:
                 'surprise_momentum': np.nan
             }
     
-    def calculate_combined_momentum(self, price_data, fundamental_data=None):
+    def calculate_momentum_score(self, stock_data):
         """
         Calcule le score de momentum combiné (technique + fondamental)
         
         Parameters:
-            price_data (pd.DataFrame): DataFrame avec les données de prix
-            fundamental_data (dict): Dictionnaire des données fondamentales
+            stock_data (dict): Dictionnaire avec les données de l'action
             
         Returns:
             dict: Score de momentum combiné et ses composantes
         """
+        # Extraction des données
+        price_data = stock_data.get('historical_prices', None)
+        fundamental_data = stock_data.get('fundamentals', None)
+        
         # Calcul du momentum technique
         technical_momentum = self.calculate_technical_momentum(price_data)
         technical_score = technical_momentum['score']
@@ -276,9 +279,9 @@ class MomentumAnalyzer:
             combined_score = np.nan
         
         return {
-            'score': combined_score,
-            'technical': technical_momentum,
-            'fundamental': fundamental_momentum
+            'total_score': combined_score,
+            'price_momentum': technical_momentum,
+            'fundamental_momentum': fundamental_momentum
         }
 
 
@@ -315,25 +318,17 @@ if __name__ == "__main__":
         'quarterly_earnings': quarterly_earnings_up
     }
     
-    # Initialisation de l'analyseur
-    momentum_analyzer = MomentumAnalyzer()
+    # Simulation des données complètes d'une action
+    stock_data = {
+        'historical_prices': prices_up,
+        'fundamentals': fundamental_data_up
+    }
     
-    # Calcul du momentum technique pour la tendance haussière
-    technical_up = momentum_analyzer.calculate_technical_momentum(prices_up)
-    print("Momentum technique (hausse):", technical_up['score'])
-    print("Scores par période:", technical_up['period_scores'])
+    # Initialisation du calculateur
+    calculator = MomentumCalculator()
     
-    # Calcul du momentum technique pour la tendance baissière
-    technical_down = momentum_analyzer.calculate_technical_momentum(prices_down)
-    print("\nMomentum technique (baisse):", technical_down['score'])
-    print("Scores par période:", technical_down['period_scores'])
-    
-    # Calcul du momentum fondamental
-    fundamental = momentum_analyzer.calculate_fundamental_momentum(fundamental_data_up)
-    print("\nMomentum fondamental:", fundamental['score'])
-    print("Momentum des bénéfices:", fundamental['earnings_momentum'])
-    print("Momentum des surprises:", fundamental['surprise_momentum'])
-    
-    # Calcul du momentum combiné
-    combined = momentum_analyzer.calculate_combined_momentum(prices_up, fundamental_data_up)
-    print("\nMomentum combiné:", combined['score'])
+    # Test de la méthode principale
+    result = calculator.calculate_momentum_score(stock_data)
+    print("Score de momentum total:", result['total_score'])
+    print("Score de momentum technique:", result['price_momentum']['score'])
+    print("Score de momentum fondamental:", result['fundamental_momentum']['score'])
