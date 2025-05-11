@@ -622,76 +622,56 @@ class ScreenerVisualizer:
             logger.warning("Pas de données de scores disponibles")
             return None
         
-        # Vérification des colonnes nécessaires
+        # Vérification que les colonnes nécessaires sont présentes
         required_columns = ['MomentumPercentile', 'QualityPercentile', 'Symbol']
         if not all(col in scores_df.columns for col in required_columns):
-            logger.warning("Colonnes nécessaires manquantes pour le nuage de points")
+            logger.warning("Données de scores incomplètes")
             return None
         
         try:
             # Création de la figure
             fig, ax = plt.subplots(figsize=self.config.get('figsize', (12, 10)))
             
-            # Extraction des scores
-            momentum_scores = scores_df['MomentumPercentile'].values
-            quality_scores = scores_df['QualityPercentile'].values
-            symbols = scores_df['Symbol'].values
+            # Extraction des scores normalisés
+            momentum_scores = scores_df['MomentumPercentile'].values / 100.0  # Conversion en score entre 0 et 1
+            quality_scores = scores_df['QualityPercentile'].values / 100.0    # Conversion en score entre 0 et 1
             
-            # Calcul du score combiné pour la taille des points
-            if 'CombinedScore' in scores_df.columns:
-                combined_scores = scores_df['CombinedScore'].values * 500  # Mise à l'échelle pour la taille des points
-            else:
-                combined_scores = np.ones_like(momentum_scores) * 50
+            # Création du nuage de points
+            scatter = ax.scatter(momentum_scores, quality_scores, 
+                                alpha=0.7, s=50, 
+                                c=momentum_scores * quality_scores,  # Couleur basée sur le produit des scores
+                                cmap='viridis')
             
-            # Secteurs pour les couleurs (si disponible)
-            if 'Sector' in scores_df.columns:
-                sectors = scores_df['Sector'].values
-                unique_sectors = np.unique(sectors)
-                sector_to_color = {sector: plt.cm.tab10(i % 10) for i, sector in enumerate(unique_sectors)}
-                colors = [sector_to_color[sector] for sector in sectors]
-            else:
-                colors = self.config.get('colors', ['#1f77b4'])[0]
+            # Ajout d'une barre de couleur
+            cbar = plt.colorbar(scatter)
+            cbar.set_label('Score Combiné (Momentum × Qualité)', rotation=270, labelpad=20)
             
-            # Tracé du nuage de points
-            scatter = ax.scatter(momentum_scores, quality_scores, s=combined_scores, c=colors, alpha=0.6)
+            # Ajout des symboles comme annotations
+            for i, symbol in enumerate(scores_df['Symbol']):
+                ax.annotate(symbol, (momentum_scores[i], quality_scores[i]),
+                           xytext=(5, 5), textcoords='offset points',
+                           fontsize=8)
             
-            # Ajout des symboles pour les points importants (top 10 combinés)
-            if 'CombinedScore' in scores_df.columns:
-                top_indices = scores_df['CombinedScore'].argsort()[::-1][:10]
-                for idx in top_indices:
-                    ax.annotate(symbols[idx], 
-                               (momentum_scores[idx], quality_scores[idx]),
-                               xytext=(5, 5), textcoords='offset points',
-                               fontsize=10, fontweight='bold')
+            # Ajout des lignes de référence
+            ax.axhline(y=0.6, color='gray', linestyle='--', alpha=0.5)  # Seuil de qualité
+            ax.axvline(x=0.7, color='gray', linestyle='--', alpha=0.5)  # Seuil de momentum
             
-            # Ajout des lignes de division pour les quadrants
-            ax.axhline(y=50, color='gray', linestyle='--', alpha=0.5)
-            ax.axvline(x=50, color='gray', linestyle='--', alpha=0.5)
-            
-            # Ajouter des étiquettes pour les quadrants
-            ax.text(25, 75, "Qualité Élevée\nMomentum Faible", ha='center', va='center', alpha=0.7, fontsize=10)
-            ax.text(75, 75, "Qualité Élevée\nMomentum Élevé", ha='center', va='center', alpha=0.7, fontsize=10)
-            ax.text(25, 25, "Qualité Faible\nMomentum Faible", ha='center', va='center', alpha=0.7, fontsize=10)
-            ax.text(75, 25, "Qualité Faible\nMomentum Élevé", ha='center', va='center', alpha=0.7, fontsize=10)
+            # Ajout de zones de quadrant (optionnel)
+            ax.fill_between([0.7, 1], 0.6, 1, color='green', alpha=0.1)  # Quadrant optimal
+            ax.text(0.85, 0.8, 'Zone Optimale', ha='center', va='center', 
+                   bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3'))
             
             # Formatage du graphique
-            ax.set_xlabel('Score de Momentum (percentile)', fontsize=self.config.get('axis_fontsize', 12))
-            ax.set_ylabel('Score de Qualité (percentile)', fontsize=self.config.get('axis_fontsize', 12))
-            ax.set_title('Nuage de Points: Momentum vs Qualité', fontsize=self.config.get('title_fontsize', 16))
+            ax.set_xlabel('Score de Momentum', fontsize=self.config.get('axis_fontsize', 12))
+            ax.set_ylabel('Score de Qualité', fontsize=self.config.get('axis_fontsize', 12))
+            ax.set_title('Nuage de Points des Scores Momentum vs Qualité', fontsize=self.config.get('title_fontsize', 16))
             
-            # Formatage des axes en pourcentage
-            ax.set_xlim(0, 100)
-            ax.set_ylim(0, 100)
-            ax.xaxis.set_major_formatter(mtick.PercentFormatter())
-            ax.yaxis.set_major_formatter(mtick.PercentFormatter())
+            # Configuration des limites des axes
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
             
-            # Légende pour les secteurs (si disponible)
-            if 'Sector' in scores_df.columns:
-                legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
-                                             markerfacecolor=sector_to_color[sector], 
-                                             markersize=8, label=sector) 
-                                  for sector in unique_sectors]
-                ax.legend(handles=legend_elements, title='Secteur', loc='upper left', bbox_to_anchor=(1, 1))
+            # Ajout des grilles
+            ax.grid(True, alpha=0.3)
             
             # Ajustement des marges
             plt.tight_layout()
@@ -707,208 +687,106 @@ class ScreenerVisualizer:
             logger.error(f"Erreur lors du traçage du nuage de points: {str(e)}")
             return None
     
-    def plot_performance_metrics(self, results, save_path=None):
+    def generate_report_visualizations(self, results, output_dir=None):
         """
-        Trace les principales métriques de performance des top picks
+        Génère toutes les visualisations pour un rapport de screening
         
         Parameters:
             results (dict): Résultats du screening
-            save_path (str): Chemin pour sauvegarder le graphique
+            output_dir (str): Répertoire de sortie pour les graphiques
             
         Returns:
-            plt.Figure: Figure matplotlib générée
+            dict: Chemins des graphiques générés
         """
-        if results is None or 'top_picks' not in results or results['top_picks'].empty:
-            logger.warning("Pas de top picks disponibles pour tracer les métriques de performance")
-            return None
+        # Utiliser le répertoire de résultats par défaut si non spécifié
+        if output_dir is None:
+            timestamp = results.get('timestamp', generate_timestamp())
+            output_dir = os.path.join(RESULTS_DIR, f"report_{timestamp}")
         
-        top_picks = results['top_picks']
+        # Création du répertoire de sortie
+        os.makedirs(output_dir, exist_ok=True)
         
-        # Vérification des colonnes nécessaires
-        performance_metrics = ['PERatio', 'ROE', 'ProfitMargin', 'DebtToEquity']
-        available_metrics = [col for col in performance_metrics if col in top_picks.columns]
+        # Chemins des graphiques à générer
+        graph_paths = {}
         
-        if not available_metrics:
-            logger.warning("Pas de métriques de performance disponibles")
-            return None
+        # Top picks
+        if 'top_picks' in results and not results['top_picks'].empty:
+            # Graphique des top picks
+            top_picks_path = os.path.join(output_dir, "top_picks.png")
+            self.plot_top_picks(results['top_picks'], save_path=top_picks_path)
+            graph_paths['top_picks'] = top_picks_path
+            
+            # Répartition sectorielle
+            if 'Sector' in results['top_picks'].columns:
+                sector_path = os.path.join(output_dir, "sector_breakdown.png")
+                self.plot_sector_breakdown(results['top_picks'], save_path=sector_path)
+                graph_paths['sector_breakdown'] = sector_path
         
-        try:
-            # Nombre de métriques à afficher
-            n_metrics = len(available_metrics)
-            
-            # Détermination de la disposition des sous-graphiques
-            n_rows = (n_metrics + 1) // 2  # Arrondi supérieur pour avoir au moins une ligne
-            n_cols = min(2, n_metrics)  # Maximum 2 colonnes
-            
-            # Création de la figure avec plusieurs sous-graphiques
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=self.config.get('figsize', (15, 10)))
-            
-            # Si un seul sous-graphique, axes doit être une liste
-            if n_metrics == 1:
-                axes = np.array([axes])
-            
-            # Tracé de chaque métrique
-            for i, metric in enumerate(available_metrics):
-                # Calcul de la position dans la grille
-                row = i // n_cols
-                col = i % n_cols
-                
-                # Accès à l'axe correspondant
-                if n_rows > 1 and n_cols > 1:
-                    ax = axes[row, col]
-                else:
-                    ax = axes[i]
-                
-                # Extraction des données pour cette métrique
-                data = top_picks[metric].values
-                symbols = top_picks['Symbol'].values
-                
-                # Tri par valeur décroissante (ou croissante pour certaines métriques)
-                sort_ascending = metric in ['DebtToEquity', 'PERatio']  # Métriques où plus petit = meilleur
-                sorted_indices = data.argsort()
-                if not sort_ascending:
-                    sorted_indices = sorted_indices[::-1]
-                
-                # Limitation du nombre de symboles affichés
-                max_symbols = min(10, len(symbols))
-                indices = sorted_indices[:max_symbols]
-                
-                # Tracé du graphique en barres
-                bars = ax.barh(np.arange(len(indices)), data[indices], 
-                              color=self.config.get('colors', ['#1f77b4'])[0])
-                
-                # Ajout des valeurs à côté des barres
-                for j, bar in enumerate(bars):
-                    width = bar.get_width()
-                    ax.annotate(f'{width:.2f}', xy=(width, bar.get_y() + bar.get_height()/2),
-                               xytext=(5, 0), textcoords='offset points',
-                               va='center')
-                
-                # Formatage du graphique
-                ax.set_yticks(np.arange(len(indices)))
-                ax.set_yticklabels(symbols[indices])
-                ax.invert_yaxis()  # Pour que le plus grand soit en haut
-                ax.set_title(f"{metric}", fontsize=self.config.get('title_fontsize', 14))
-                
-                # Ajout d'une grille horizontale pour faciliter la lecture
-                ax.grid(axis='y', linestyle='--', alpha=0.3)
-            
-            # Si le nombre de métriques est impair, supprimer le dernier sous-graphique vide
-            if n_metrics % 2 == 1 and n_rows > 1 and n_cols > 1:
-                fig.delaxes(axes[n_rows-1, n_cols-1])
-            
-            # Titre global
-            fig.suptitle('Métriques de Performance des Top Picks', fontsize=self.config.get('title_fontsize', 16))
-            
-            # Ajustement des marges
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            
-            # Sauvegarde du graphique si un chemin est spécifié
-            if save_path:
-                plt.savefig(save_path, dpi=300, bbox_inches='tight')
-                logger.info(f"Graphique sauvegardé dans {save_path}")
-            
-            return fig
-            
-        except Exception as e:
-            logger.error(f"Erreur lors du traçage des métriques de performance: {str(e)}")
-            return None
+        # Nuage de points de tous les scores
+        if 'scores' in results and not results['scores'].empty:
+            scatter_path = os.path.join(output_dir, "scores_scatter.png")
+            self.plot_scores_scatter(results['scores'], save_path=scatter_path)
+            graph_paths['scores_scatter'] = scatter_path
+        
+        return graph_paths
 
 
-# Code de test du module si exécuté directement
 if __name__ == "__main__":
-    # Création de données de test
+    # Test simple du module
     import pandas as pd
     import numpy as np
     from datetime import datetime, timedelta
     
-    # Création d'un DataFrame de prix historiques
-    dates = pd.date_range(end=datetime.now(), periods=252, freq='B')
-    prices = np.linspace(100, 150, len(dates)) + np.random.normal(0, 5, len(dates))
+    # Création de données de test
+    dates = pd.date_range(end=datetime.now(), periods=300, freq='D')
+    
+    # Série de prix avec tendance haussière
     historical_data = pd.DataFrame({
-        'open': prices - 1,
-        'high': prices + 2,
-        'low': prices - 2,
-        'close': prices,
-        'adjusted_close': prices,
-        'volume': np.random.randint(100000, 1000000, len(dates))
+        'close': [100 + i * 0.5 + np.random.normal(0, 5) for i in range(300)],
+        'adjusted_close': [100 + i * 0.5 + np.random.normal(0, 5) for i in range(300)],
+        'volume': [1000000 + np.random.randint(0, 500000) for _ in range(300)]
     }, index=dates)
     
-    # Création de données fondamentales
-    fundamental_data = {
-        'overview': {
-            'Symbol': 'AAPL',
-            'Name': 'Apple Inc.',
-            'Sector': 'Technology',
-            'Industry': 'Consumer Electronics',
-            'ROE': 0.15,
-            'ProfitMargin': 0.21,
-            'OperatingMarginTTM': 0.25,
-            'DebtToEquity': 1.2,
-            'PERatio': 26.5,
-            'PEGRatio': 1.8
-        },
-        'quarterly_earnings': pd.DataFrame({
-            'fiscalDateEnding': pd.date_range(end=datetime.now(), periods=8, freq='3M')[::-1],
-            'reportedEPS': [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9],
-            'estimatedEPS': [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8],
-            'surprisePercentage': [9.1, 8.3, 7.7, 7.1, 6.7, 6.3, 5.9, 5.6]
-        })
-    }
+    # Initialisation du visualiseur
+    momentum_viz = MomentumVisualizer()
     
-    # Création de résultats de screening
-    scores_df = pd.DataFrame({
-        'Symbol': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'JPM', 'JNJ', 'WMT'],
-        'Name': ['Apple Inc.', 'Microsoft Corp.', 'Alphabet Inc.', 'Amazon.com Inc.', 'Meta Platforms Inc.', 
-                'Tesla Inc.', 'NVIDIA Corp.', 'JPMorgan Chase & Co.', 'Johnson & Johnson', 'Walmart Inc.'],
-        'Sector': ['Technology', 'Technology', 'Communication Services', 'Consumer Discretionary', 'Communication Services',
-                  'Consumer Discretionary', 'Technology', 'Financials', 'Healthcare', 'Consumer Staples'],
-        'MomentumScore': [0.8, 0.7, 0.6, 0.75, 0.65, 0.85, 0.9, 0.5, 0.4, 0.45],
-        'QualityScore': [0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.9, 0.95, 0.7],
-        'MomentumPercentile': [80, 70, 60, 75, 65, 85, 90, 50, 40, 45],
-        'QualityPercentile': [85, 80, 75, 70, 65, 60, 55, 90, 95, 70],
-        'CombinedScore': [0.82, 0.74, 0.66, 0.73, 0.65, 0.75, 0.76, 0.66, 0.62, 0.55],
-        'PERatio': [26.5, 30.2, 28.1, 72.4, 22.3, 80.5, 50.2, 15.3, 18.2, 22.8],
-        'ROE': [0.15, 0.14, 0.13, 0.10, 0.18, 0.09, 0.20, 0.12, 0.11, 0.08],
-        'ProfitMargin': [0.21, 0.19, 0.18, 0.05, 0.15, 0.07, 0.25, 0.22, 0.20, 0.03],
-        'DebtToEquity': [1.2, 0.8, 0.5, 1.5, 0.6, 1.8, 0.7, 2.0, 0.9, 1.3]
+    # Traçage de l'historique des prix
+    periods = {'court_terme': 20, 'moyen_terme': 60, 'long_terme': 120}
+    fig = momentum_viz.plot_price_history(historical_data, 'AAPL', name='Apple Inc.', periods=periods)
+    
+    if fig:
+        plt.show()
+    
+    # Test avec le visualiseur de screening
+    # Création de données de test pour les scores
+    test_scores = pd.DataFrame({
+        'Symbol': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META'],
+        'Name': ['Apple Inc.', 'Microsoft Corp.', 'Alphabet Inc.', 'Amazon.com Inc.', 'Meta Platforms Inc.'],
+        'Sector': ['Technology', 'Technology', 'Communication Services', 'Consumer Discretionary', 'Communication Services'],
+        'MomentumScore': [0.85, 0.76, 0.92, 0.68, 0.79],
+        'QualityScore': [0.91, 0.88, 0.73, 0.81, 0.62],
+        'MomentumPercentile': [85, 76, 92, 68, 79],
+        'QualityPercentile': [91, 88, 73, 81, 62],
+        'CombinedScore': [0.87, 0.82, 0.85, 0.76, 0.70]
     })
     
-    top_picks = scores_df.sort_values('CombinedScore', ascending=False).head(5)
-    
-    screening_results = {
-        'scores': scores_df,
-        'top_picks': top_picks,
-        'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
-        'config': {
-            'min_market_cap': 1e9,
-            'max_pe_ratio': 50,
-            'min_roe': 0.10,
-            'momentum_threshold': 0.70,
-            'quality_threshold': 0.60
-        }
-    }
-    
-    # Test du module MomentumVisualizer
-    momentum_viz = MomentumVisualizer()
-    price_fig = momentum_viz.plot_price_history(historical_data, 'AAPL', 'Apple Inc.', 
-                                               periods={'short_term': 20, 'medium_term': 60, 'long_term': 252})
-    plt.close(price_fig)
-    
-    # Test du module QualityVisualizer
-    quality_viz = QualityVisualizer()
-    ratios_fig = quality_viz.plot_financial_ratios(fundamental_data, 'AAPL', 'Apple Inc.')
-    plt.close(ratios_fig)
-    
-    # Test du module ScreenerVisualizer
+    # Initialisation du visualiseur de screening
     screener_viz = ScreenerVisualizer()
-    top_picks_fig = screener_viz.plot_top_picks(top_picks)
-    plt.close(top_picks_fig)
     
-    scatter_fig = screener_viz.plot_scores_scatter(scores_df)
-    plt.close(scatter_fig)
+    # Traçage des top picks
+    fig_top = screener_viz.plot_top_picks(test_scores)
     
-    metrics_fig = screener_viz.plot_performance_metrics(screening_results)
-    plt.close(metrics_fig)
+    if fig_top:
+        plt.show()
     
-    print("Tests des visualisations exécutés avec succès !")
+    # Traçage de la répartition sectorielle
+    fig_sector = screener_viz.plot_sector_breakdown(test_scores)
+    
+    if fig_sector:
+        plt.show()
+    
+    # Traçage du nuage de points
+    fig_scatter = screener_viz.plot_scores_scatter(test_scores)
+    
+    if fig_scatter:
+        plt.show()
