@@ -38,6 +38,36 @@ cd momentum-picks-analyzer
 pip install -r requirements.txt
 ```
 
+## Configuration de l'API Alpha Vantage
+
+Ce projet utilise l'API Alpha Vantage pour récupérer les données boursières. Vous devez obtenir une clé API gratuite sur [leur site officiel](https://www.alphavantage.co/support/#api-key).
+
+La méthode recommandée est d'utiliser une variable d'environnement pour stocker votre clé API :
+
+### Windows (Invite de commandes)
+```bash
+set ALPHA_VANTAGE_API_KEY=votre_clé_api_ici
+```
+
+### Windows (PowerShell)
+```bash
+$env:ALPHA_VANTAGE_API_KEY = "votre_clé_api_ici"
+```
+
+### Linux/macOS
+```bash
+export ALPHA_VANTAGE_API_KEY=votre_clé_api_ici
+```
+
+Pour rendre cette configuration permanente :
+- **Windows** : Définissez une variable d'environnement système via les Paramètres système > Paramètres système avancés > Variables d'environnement
+- **Linux/macOS** : Ajoutez la commande `export` à votre fichier `~/.bashrc`, `~/.zshrc` ou équivalent
+
+Alternatives :
+- Spécifier la clé directement avec l'option `--api-key` en ligne de commande
+- Entrer la clé dans l'interface Streamlit quand demandé
+- Lorsque vous exécutez `main.py` sans spécifier de clé, vous serez invité à l'entrer
+
 ## Utilisation
 
 ### En ligne de commande
