@@ -13,7 +13,7 @@ from utils import setup_logger, normalize_data, calculate_weighted_score
 # Configuration du logger
 logger = setup_logger(__name__, "quality.log")
 
-class QualityAnalyzer:
+class QualityCalculator:
     """
     Classe pour calculer les scores de qualité des entreprises
     """
@@ -331,7 +331,7 @@ class QualityAnalyzer:
             logger.error(f"Erreur lors du calcul du score de stabilité: {str(e)}")
             return np.nan
     
-    def calculate_quality_score(self, fundamental_data):
+    def calculate_fundamental_quality(self, fundamental_data):
         """
         Calcule le score de qualité global basé sur les données fondamentales
         
@@ -391,6 +391,35 @@ class QualityAnalyzer:
                 'score': np.nan,
                 'metric_scores': {}
             }
+        
+    def calculate_quality_score(self, stock_data):
+        """
+        Point d'entrée principal pour le calcul du score de qualité d'une action
+        
+        Parameters:
+            stock_data (dict): Dictionnaire contenant les données de l'action
+            
+        Returns:
+            dict: Score de qualité total et détails
+        """
+        # Extraction des données fondamentales
+        fundamental_data = stock_data.get('fundamentals', None)
+        
+        if fundamental_data is None:
+            logger.warning("Pas de données fondamentales disponibles pour le calcul du score de qualité")
+            return {
+                'total_score': np.nan,
+                'metric_scores': {}
+            }
+        
+        # Calcul du score de qualité fondamentale
+        quality_results = self.calculate_fundamental_quality(fundamental_data)
+        
+        # Formatage du résultat pour correspondre à l'interface attendue
+        return {
+            'total_score': quality_results['score'],
+            'metric_scores': quality_results['metric_scores']
+        }
 
 
 if __name__ == "__main__":
@@ -429,6 +458,11 @@ if __name__ == "__main__":
         'cash_flow': test_cash_flow
     }
     
+    # Simulation d'une action complète
+    test_stock_data = {
+        'fundamentals': test_fundamental_data
+    }
+    
     # Initialisation de l'analyseur avec des métriques étendues
     extended_metrics = ['ROE', 'ProfitMargin', 'DebtToEquity', 'OperatingMarginTTM', 'FreeCashFlow', 'Stability']
     extended_weights = {
@@ -440,12 +474,12 @@ if __name__ == "__main__":
         'Stability': 0.1
     }
     
-    quality_analyzer = QualityAnalyzer(metrics=extended_metrics, weights=extended_weights)
+    quality_calculator = QualityCalculator(metrics=extended_metrics, weights=extended_weights)
     
     # Calcul du score de qualité
-    quality_result = quality_analyzer.calculate_quality_score(test_fundamental_data)
+    quality_result = quality_calculator.calculate_quality_score(test_stock_data)
     
-    print("Score de qualité global:", quality_result['score'])
+    print("Score de qualité global:", quality_result['total_score'])
     print("\nScores par métrique:")
     for metric, score in quality_result['metric_scores'].items():
         print(f"{metric}: {score}")
