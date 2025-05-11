@@ -13,6 +13,9 @@ Cet outil Python permet d'analyser des actions à travers différents indices en
 - Calcul des scores Quality (ROE, ROCE, marge nette, etc.)
 - Filtrage et sélection des meilleures opportunités d'investissement
 - Visualisation des résultats sous forme de tableaux et graphiques
+- Interface web Streamlit pour une utilisation facile
+- Notebook Jupyter pour l'exploration interactive des données
+- Tests unitaires pour assurer la fiabilité du code
 
 ## Structure du projet
 
@@ -21,7 +24,11 @@ Cet outil Python permet d'analyser des actions à travers différents indices en
 - `quality.py` : calcul du score de qualité
 - `screener.py` : combinaison, filtrage et sélection finale
 - `visualization.py` : production des graphiques
-- `main.py` ou `notebook.ipynb` : exécution complète
+- `config.py` : configuration globale du projet
+- `main.py` : exécution en ligne de commande
+- `notebook.ipynb` : exploration interactive 
+- `streamlit_app.py` : interface web
+- `tests/` : tests unitaires
 
 ## Installation
 
@@ -33,11 +40,53 @@ pip install -r requirements.txt
 
 ## Utilisation
 
+### En ligne de commande
+
 ```bash
-python main.py
+python main.py --index SP500 --top 20 --momentum-weight 0.6 --quality-weight 0.4
 ```
 
-ou ouvrir et exécuter le notebook `notebook.ipynb`.
+Options disponibles:
+- `--index` : Indice à analyser (SP500, NASDAQ, EUROSTOXX50, MSCI_TECH)
+- `--top` : Nombre d'actions à retenir dans le classement final
+- `--min-momentum` : Score minimum de Momentum pour le filtrage
+- `--min-quality` : Score minimum de Quality pour le filtrage
+- `--min-combined` : Score minimum combiné pour le filtrage
+- `--momentum-weight` : Poids du score Momentum dans le score combiné
+- `--quality-weight` : Poids du score Quality dans le score combiné
+- `--output-dir` : Répertoire de sortie pour les résultats
+- `--api-key` : Clé API Alpha Vantage
+- `--no-plots` : Désactiver la génération des graphiques
+
+### Interface web Streamlit
+
+```bash
+streamlit run streamlit_app.py
+```
+
+L'interface web vous permet d'interagir facilement avec l'outil sans ligne de commande, avec des visualisations interactives.
+
+### Notebook Jupyter
+
+```bash
+jupyter notebook notebook.ipynb
+```
+
+Le notebook vous permet d'explorer les données et les résultats de manière interactive, de personnaliser les analyses et de créer vos propres visualisations.
+
+## Tests
+
+Pour exécuter les tests unitaires:
+
+```bash
+pytest
+```
+
+Ou pour une sortie plus détaillée:
+
+```bash
+pytest -v
+```
 
 ## Technologies utilisées
 
@@ -46,3 +95,14 @@ ou ouvrir et exécuter le notebook `notebook.ipynb`.
 - Requests, Alpha Vantage API
 - Matplotlib, Seaborn, Plotly
 - Scikit-learn (pour la normalisation des scores)
+- Streamlit (pour l'interface web)
+- Jupyter (pour le notebook interactif)
+- Pytest (pour les tests unitaires)
+
+## Contribution
+
+Les contributions sont les bienvenues! N'hésitez pas à soumettre des pull requests ou à ouvrir des issues pour signaler des bugs ou proposer des améliorations.
+
+## Licence
+
+Ce projet est distribué sous licence MIT. Voir le fichier LICENSE pour plus de détails.
